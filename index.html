@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FreeSurfer AD Pipeline — Results Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.3/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1420;
+    --panel: #171d2e;
+    --panel-border: #262f45;
+    --text: #e7ebf5;
+    --muted: #93a0c0;
+    --accent: #5b8cff;
+    --accent-soft: rgba(91, 140, 255, 0.15);
+    --ok: #3ecf8e;
+    --warn: #f2b84b;
+    --bad: #f2555c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    padding: 24px;
+  }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .subtitle { color: var(--muted); font-size: 14px; margin-bottom: 24px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 18px 20px;
+    margin-bottom: 20px;
+  }
+  .panel h2 { font-size: 15px; margin: 0 0 14px; color: var(--text); }
+  .upload-row { display: flex; flex-wrap: wrap; gap: 16px; }
+  .upload-field { flex: 1; min-width: 220px; }
+  .upload-field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .upload-field input[type="file"] {
+    width: 100%; font-size: 12px; color: var(--text);
+    background: #0d1220; border: 1px dashed var(--panel-border);
+    border-radius: 8px; padding: 10px;
+  }
+  .status { font-size: 12px; margin-top: 6px; color: var(--muted); }
+  .status.ok { color: var(--ok); }
+  .status.bad { color: var(--bad); }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; }
+  .card {
+    background: #0d1220; border: 1px solid var(--panel-border); border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .card .value { font-size: 26px; font-weight: 700; }
+  .card .label { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .card.ok .value { color: var(--ok); }
+  .card.warn .value { color: var(--warn); }
+  .card.bad .value { color: var(--bad); }
+
+  .grid-2 { display: grid; grid-template-columns: 1.1fr 1fr; gap: 20px; }
+  @media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }
+
+  select, input[type="text"] {
+    background: #0d1220; color: var(--text); border: 1px solid var(--panel-border);
+    border-radius: 6px; padding: 7px 10px; font-size: 13px;
+  }
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; align-items: center; }
+  .controls label { font-size: 12px; color: var(--muted); margin-right: 4px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--panel-border); }
+  th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--panel); }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+  .table-scroll { max-height: 360px; overflow: auto; border: 1px solid var(--panel-border); border-radius: 8px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .badge.ALL, .badge.vox_ALL { background: rgba(242, 85, 92, 0.18); color: var(--bad); }
+  .badge.other { background: var(--accent-soft); color: var(--accent); }
+
+  pre.qc {
+    background: #0d1220; border: 1px solid var(--panel-border); border-radius: 8px;
+    padding: 14px; font-size: 12.5px; white-space: pre-wrap; max-height: 320px; overflow: auto;
+  }
+  .empty-note { color: var(--muted); font-size: 13px; padding: 20px 0; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>FreeSurfer AD Pipeline — Results Dashboard</h1>
+<div class="subtitle">
+  Load the CSV/TXT files produced by <code>fs_pipeline</code> below. Everything runs in your
+  browser — no data is uploaded anywhere.
+</div>
+
+<div class="panel">
+  <h2>1. Load your output files</h2>
+  <div class="upload-row">
+    <div class="upload-field">
+      <label for="fileWide">master_features_wide.csv (required)</label>
+      <input type="file" id="fileWide" accept=".csv" />
+      <div class="status" id="statusWide">No file loaded.</div>
+    </div>
+    <div class="upload-field">
+      <label for="fileMissing">missing_values.csv (optional)</label>
+      <input type="file" id="fileMissing" accept=".csv" />
+      <div class="status" id="statusMissing">No file loaded.</div>
+    </div>
+    <div class="upload-field">
+      <label for="fileQC">qc_report.txt (optional)</label>
+      <input type="file" id="fileQC" accept=".txt" />
+      <div class="status" id="statusQC">No file loaded.</div>
+    </div>
+  </div>
+</div>
+
+<div id="dashboardBody" style="display:none;">
+
+  <div class="panel">
+    <h2>2. Summary</h2>
+    <div class="cards" id="summaryCards"></div>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <h2>3. Subjects per group</h2>
+      <canvas id="groupChart" height="220"></canvas>
+    </div>
+    <div class="panel">
+      <h2>4. Compare a region across groups</h2>
+      <div class="controls">
+        <label>Region</label>
+        <select id="regionSelect"></select>
+        <label>Feature</label>
+        <select id="featureSelect"></select>
+      </div>
+      <canvas id="regionChart" height="220"></canvas>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>5. Missing values</h2>
+    <div class="controls">
+      <label>Filter</label>
+      <input type="text" id="missingFilter" placeholder="Type a SubjectID, Group, or ROI..." />
+      <span class="status" id="missingCount"></span>
+    </div>
+    <div class="table-scroll">
+      <table id="missingTable">
+        <thead><tr><th>SubjectID</th><th>Group</th><th>ROI</th><th>Feature</th><th>Reason</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>6. QC report</h2>
+    <pre class="qc" id="qcText">No qc_report.txt loaded.</pre>
+  </div>
+
+  <div class="panel">
+    <h2>7. Subject feature table (SubjectID, Group + selected region above)</h2>
+    <div class="table-scroll">
+      <table id="subjectTable">
+        <thead></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Config mirrors fs_pipeline/config.py so the dropdowns line up with the
+// actual column names the pipeline writes into master_features_wide.csv.
+// ---------------------------------------------------------------------------
+const ASEG_REGIONS = [
+  "Left_Hippocampus", "Right_Hippocampus", "Left_Amygdala", "Right_Amygdala",
+  "Left_Putamen", "Right_Putamen", "Left_Thalamus_Proper", "Right_Thalamus_Proper",
+  "Brain_Stem", "Left_Lateral_Ventricle", "Right_Lateral_Ventricle", "Third_Ventricle",
+  "CC_Posterior", "CC_Mid_Posterior", "CC_Central", "CC_Mid_Anterior", "CC_Anterior",
+  "Left_Cerebellum_Cortex", "Right_Cerebellum_Cortex",
+];
+const APARC_REGIONS = ["lh_Entorhinal", "rh_Entorhinal", "lh_Insula", "rh_Insula"];
+const ALL_REGIONS = ASEG_REGIONS.concat(APARC_REGIONS);
+
+const ASEG_FEATURES = ["NVoxels", "Volume_mm3", "normMean", "normStdDev", "normMin", "normMax", "normRange"];
+const APARC_FEATURES = ["NumVert", "SurfArea", "GrayVol", "ThickAvg", "ThickStd", "MeanCurv", "GausCurv", "FoldInd", "CurvInd"];
+const VOX_FEATURES = [
+  "NVoxels", "Volume_mm3", "Mean", "Std", "Min", "Max", "Median", "P5", "P95",
+  "Skewness", "Kurtosis", "CentroidX", "CentroidY", "CentroidZ", "BBoxDX_mm", "BBoxDY_mm", "BBoxDZ_mm",
+].map(f => "vox_" + f);
+
+let wideData = null;
+let missingData = null;
+let groupChart = null;
+let regionChart = null;
+
+function setStatus(id, text, cls) {
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = "status " + (cls || "");
+}
+
+document.getElementById("fileWide").addEventListener("change", e => handleWide(e.target.files[0]));
+document.getElementById("fileMissing").addEventListener("change", e => handleMissing(e.target.files[0]));
+document.getElementById("fileQC").addEventListener("change", e => handleQC(e.target.files[0]));
+
+function handleWide(file) {
+  if (!file) return;
+  Papa.parse(file, {
+    header: true, dynamicTyping: true, skipEmptyLines: true,
+    complete: results => {
+      wideData = results.data;
+      setStatus("statusWide", `Loaded ${wideData.length} subjects.`, "ok");
+      document.getElementById("dashboardBody").style.display = "block";
+      buildDashboard();
+    },
+    error: err => setStatus("statusWide", "Failed to parse: " + err, "bad"),
+  });
+}
+
+function handleMissing(file) {
+  if (!file) return;
+  Papa.parse(file, {
+    header: true, skipEmptyLines: true,
+    complete: results => {
+      missingData = results.data;
+      setStatus("statusMissing", `Loaded ${missingData.length} rows.`, "ok");
+      renderMissingTable();
+    },
+    error: err => setStatus("statusMissing", "Failed to parse: " + err, "bad"),
+  });
+}
+
+function handleQC(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    document.getElementById("qcText").textContent = reader.result;
+    setStatus("statusQC", "Loaded.", "ok");
+  };
+  reader.onerror = () => setStatus("statusQC", "Failed to read file.", "bad");
+  reader.readAsText(file);
+}
+
+function buildDashboard() {
+  if (!wideData) return;
+  renderSummaryCards();
+  renderGroupChart();
+  populateRegionControls();
+  renderRegionChart();
+  renderSubjectTable();
+}
+
+function renderSummaryCards() {
+  const groups = {};
+  let complete = 0, partial = 0;
+  const missingBySubject = {};
+  if (missingData) {
+    missingData.forEach(r => {
+      if (!r.SubjectID) return;
+      missingBySubject[r.SubjectID] = (missingBySubject[r.SubjectID] || 0) + 1;
+    });
+  }
+
+  wideData.forEach(row => {
+    groups[row.Group] = (groups[row.Group] || 0) + 1;
+    if (missingBySubject[row.SubjectID]) partial++; else complete++;
+  });
+
+  const cards = [
+    { label: "Total subjects", value: wideData.length, cls: "" },
+    { label: "Groups", value: Object.keys(groups).length, cls: "" },
+    { label: "Fully complete subjects", value: complete, cls: "ok" },
+    { label: "Subjects with any missing value", value: partial, cls: partial > 0 ? "warn" : "ok" },
+    { label: "Feature columns", value: Object.keys(wideData[0]).length - 2, cls: "" },
+  ];
+
+  const container = document.getElementById("summaryCards");
+  container.innerHTML = "";
+  cards.forEach(c => {
+    const div = document.createElement("div");
+    div.className = "card " + c.cls;
+    div.innerHTML = `<div class="value">${c.value}</div><div class="label">${c.label}</div>`;
+    container.appendChild(div);
+  });
+}
+
+function renderGroupChart() {
+  const groups = {};
+  wideData.forEach(row => { groups[row.Group] = (groups[row.Group] || 0) + 1; });
+  const labels = Object.keys(groups).sort();
+  const values = labels.map(g => groups[g]);
+
+  if (groupChart) groupChart.destroy();
+  groupChart = new Chart(document.getElementById("groupChart"), {
+    type: "bar",
+    data: { labels, datasets: [{ label: "Subjects", data: values, backgroundColor: "#5b8cff" }] },
+    options: {
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: "#93a0c0" }, grid: { color: "#262f45" } },
+        y: { ticks: { color: "#93a0c0" }, grid: { color: "#262f45" }, beginAtZero: true },
+      },
+    },
+  });
+}
+
+function populateRegionControls() {
+  const regionSelect = document.getElementById("regionSelect");
+  regionSelect.innerHTML = "";
+  ALL_REGIONS.forEach(r => {
+    const opt = document.createElement("option");
+    opt.value = r; opt.textContent = r;
+    regionSelect.appendChild(opt);
+  });
+  regionSelect.addEventListener("change", () => { populateFeatureControls(); renderRegionChart(); renderSubjectTable(); });
+  populateFeatureControls();
+  document.getElementById("featureSelect").addEventListener("change", () => { renderRegionChart(); renderSubjectTable(); });
+}
+
+function populateFeatureControls() {
+  const region = document.getElementById("regionSelect").value;
+  const isCortical = APARC_REGIONS.includes(region);
+  const statsFeatures = isCortical ? APARC_FEATURES : ASEG_FEATURES;
+  const allFeatures = statsFeatures.concat(VOX_FEATURES);
+
+  const featureSelect = document.getElementById("featureSelect");
+  featureSelect.innerHTML = "";
+  allFeatures.forEach(f => {
+    const colName = region + "_" + f;
+    if (wideData.length && !(colName in wideData[0])) return; // skip columns not present in this file
+    const opt = document.createElement("option");
+    opt.value = f; opt.textContent = f;
+    featureSelect.appendChild(opt);
+  });
+}
+
+function renderRegionChart() {
+  const region = document.getElementById("regionSelect").value;
+  const feature = document.getElementById("featureSelect").value;
+  if (!region || !feature) return;
+  const col = region + "_" + feature;
+
+  const sums = {}, counts = {};
+  wideData.forEach(row => {
+    const v = row[col];
+    if (v === null || v === undefined || v === "" || isNaN(v)) return;
+    sums[row.Group] = (sums[row.Group] || 0) + Number(v);
+    counts[row.Group] = (counts[row.Group] || 0) + 1;
+  });
+  const labels = Object.keys(sums).sort();
+  const values = labels.map(g => sums[g] / counts[g]);
+
+  if (regionChart) regionChart.destroy();
+  regionChart = new Chart(document.getElementById("regionChart"), {
+    type: "bar",
+    data: { labels, datasets: [{ label: `Average ${col}`, data: values, backgroundColor: "#3ecf8e" }] },
+    options: {
+      plugins: { legend: { display: false }, title: { display: true, text: col, color: "#e7ebf5" } },
+      scales: {
+        x: { ticks: { color: "#93a0c0" }, grid: { color: "#262f45" } },
+        y: { ticks: { color: "#93a0c0" }, grid: { color: "#262f45" } },
+      },
+    },
+  });
+}
+
+function renderSubjectTable() {
+  const region = document.getElementById("regionSelect").value;
+  if (!region) return;
+  const isCortical = APARC_REGIONS.includes(region);
+  const statsFeatures = isCortical ? APARC_FEATURES : ASEG_FEATURES;
+  const cols = statsFeatures.filter(f => wideData.length && (region + "_" + f) in wideData[0]);
+
+  const table = document.getElementById("subjectTable");
+  const thead = table.querySelector("thead");
+  const tbody = table.querySelector("tbody");
+  thead.innerHTML = "<tr><th>SubjectID</th><th>Group</th>" + cols.map(c => `<th>${c}</th>`).join("") + "</tr>";
+  tbody.innerHTML = "";
+  wideData.forEach(row => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${row.SubjectID}</td><td>${row.Group}</td>` +
+      cols.map(c => `<td>${fmt(row[region + "_" + c])}</td>`).join("");
+    tbody.appendChild(tr);
+  });
+}
+
+function fmt(v) {
+  if (v === null || v === undefined || v === "") return "—";
+  if (typeof v === "number") return Number.isInteger(v) ? v : v.toFixed(2);
+  return v;
+}
+
+function renderMissingTable() {
+  if (!missingData) return;
+  const filterInput = document.getElementById("missingFilter");
+  const countEl = document.getElementById("missingCount");
+
+  function draw() {
+    const q = filterInput.value.trim().toLowerCase();
+    const rows = missingData.filter(r =>
+      !q || [r.SubjectID, r.Group, r.ROI, r.Feature, r.Reason].some(v => (v || "").toLowerCase().includes(q))
+    );
+    countEl.textContent = `${rows.length} / ${missingData.length} rows shown`;
+    const tbody = document.querySelector("#missingTable tbody");
+    tbody.innerHTML = rows.slice(0, 500).map(r => {
+      const badgeClass = (r.Feature === "ALL" || r.Feature === "vox_ALL") ? r.Feature : "other";
+      return `<tr><td>${r.SubjectID}</td><td>${r.Group}</td><td>${r.ROI}</td>` +
+        `<td><span class="badge ${badgeClass}">${r.Feature}</span></td><td>${r.Reason}</td></tr>`;
+    }).join("");
+  }
+  filterInput.addEventListener("input", draw);
+  draw();
+}
+</script>
+</body>
+</html>
