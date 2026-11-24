@@ -1,4 +1,3 @@
-# mri_feature_extraction
 # FreeSurfer AD Morphometric Extraction Pipeline (`fs_pipeline`)
 
 Publication-quality, modular extraction of subcortical/cortical ROI morphometry and
@@ -28,7 +27,7 @@ pipeline:
 ## 2. Folder Structure
 
 ```
-freesurfer_subjects/
+mri_feature_extraction/          # this repository
 ├── fs_pipeline/                 # the package
 │   ├── __init__.py
 │   ├── config.py                 # ROI lists, aliases, feature names, PipelineConfig
@@ -40,13 +39,19 @@ freesurfer_subjects/
 │   ├── segmentation.py           # NIfTI ROI mask export
 │   ├── dataset.py                # subject discovery + wide/long assembly
 │   ├── qc.py                     # QC / missing-value / segmentation reports
-│   └── pipeline.py               # CLI entry point, multiprocessing
+│   ├── pipeline.py               # CLI entry point, multiprocessing
+│   └── __main__.py               # enables `python3 -m fs_pipeline ...`
+├── tests/                        # pytest suite (runs on small synthetic FreeSurfer subjects)
+├── index.html                    # static results dashboard (see section 11)
 ├── run_pipeline.py               # `python3 run_pipeline.py ...`
 ├── requirements.txt
-├── README.md
-├── extract_freesurfer_features.py   # earlier single-file script (superseded, kept for reference)
-└── SMCI/ EMCI/ MCI/ LMCI/ AD_Preprocessed/ ...   # your FreeSurfer subject data
+├── requirements-dev.txt          # adds pytest
+├── .gitignore                    # keeps imaging data and outputs out of git
+└── README.md
 ```
+
+Your FreeSurfer subject data (`SMCI/ EMCI/ MCI/ LMCI/ AD_Preprocessed/ ...`) lives wherever you
+like and is passed with `--data-root`; it is never part of this repository.
 
 Input layout expected under `--data-root` (any group names, auto-discovered):
 
@@ -57,22 +62,28 @@ Input layout expected under `--data-root` (any group names, auto-discovered):
 ## 3. Installation
 
 ```bash
-cd /home/sai/freesurfer_subjects
-pip install -r requirements.txt --break-system-packages   # or inside a venv, drop the flag
+git clone https://github.com/Sai010607/mri_feature_extraction.git
+cd mri_feature_extraction
+python3 -m venv .venv && source .venv/bin/activate        # optional but recommended
+pip install -r requirements.txt
 ```
 
-Core dependency (`pandas`) is required always. `nibabel` is required for voxel-level
-features and segmentation export (both on by default; disable with `--no-voxel-features`
-/ `--no-segmentations` if you only want the stats-table numbers). `tqdm` is optional —
-progress bars are skipped gracefully if it isn't installed.
+Core dependencies (`pandas`, `numpy`) are required always. `nibabel` is required for
+voxel-level features and segmentation export (both on by default; disable with
+`--no-voxel-features` / `--no-segmentations` if you only want the stats-table numbers —
+if `nibabel` is missing and neither is disabled, the run stops immediately with a clear
+message instead of producing a table full of error rows). `tqdm` is optional — progress
+bars are skipped gracefully if it isn't installed.
 
 ## 4. Requirements
 
 * Python 3.9+
-* pandas
-* numpy
+* pandas, numpy
 * nibabel (only needed for voxel features / segmentation export)
 * tqdm (optional, progress bars only)
+* pytest (only to run the test suite, see `requirements-dev.txt`)
+
+All of the above except pytest are listed in `requirements.txt`.
 
 ## 5. Usage
 
@@ -84,14 +95,17 @@ python3 run_pipeline.py \
     --workers 4
 ```
 
+`python3 -m fs_pipeline ...` is equivalent. `--data-root` is required (there is no built-in
+default path).
+
 Common flags:
 
 | Flag | Meaning |
 |---|---|
-| `--data-root PATH` | Root folder containing one subfolder per diagnostic group. |
+| `--data-root PATH` | **Required.** Root folder containing one subfolder per diagnostic group. |
 | `--groups A B C` | Restrict to specific group folders (default: every subfolder). |
 | `--output-dir PATH` | Where all outputs are written (default `fs_pipeline_output/`). |
-| `--workers N` | Parallel subject processing via `ProcessPoolExecutor`. |
+| `--workers N` | Parallel subject processing via `ProcessPoolExecutor` (output files are identical for any `N`). |
 | `--no-voxel-features` | Skip the nibabel-based voxel feature family. |
 | `--no-segmentations` | Skip NIfTI mask export. |
 | `--metadata-csv PATH` | Optional CSV (`SubjectID` + any of `Age, Sex, MMSE, Diagnosis, Scanner, AcquisitionDate`) left-joined onto the wide table. |
@@ -114,6 +128,16 @@ Written to `--output-dir` (default `fs_pipeline_output/`):
 | `segmentation_summary.csv` | `SubjectID, Group, Region, ROI_Label, Voxel_Count, Volume_mm3, Mask_File, Status` for every exported mask. |
 | `processing.log` | Full log of the run (mirrors console output). |
 | `segmented_regions/<Group>/<SubjectID>/<Region>.nii.gz` | One binary mask per ROI per subject. |
+
+**Voxel-level feature definitions** (`<Region>_vox_<Feature>`): `NVoxels`, `Volume_mm3`
+(voxel count × voxel volume), intensity `Mean / Std / Min / Max / Median / P5 / P95`
+(`Std` is the population standard deviation, ddof=0), `Skewness`, `Kurtosis` (excess/Fisher,
+so a normal distribution is 0), `CentroidX/Y/Z` (scanner-RAS millimetres) and
+`BBoxDX/DY/DZ_mm` (bounding-box extent along each voxel axis, in mm). Intensities are read
+from the first existing volume among `norm.mgz`, `brain.mgz`, `T1.mgz`; with `norm.mgz`,
+`vox_Mean` reproduces the `normMean` column of `aseg.stats`, which is a handy sanity check.
+Skewness/Kurtosis are recorded in `missing_values.csv` (not silently `NaN`) for the rare ROI
+whose intensities are all identical.
 
 **Column naming note:** stats-table columns keep FreeSurfer's own names exactly
 (`Volume_mm3`, `normMean`, ...) for traceability back to the source `.stats` files,
@@ -169,14 +193,19 @@ join — this is entirely optional and never blocks extraction.
   reliable; on macOS/Windows (spawn start method) some worker-side warning/error
   logs may not reach `processing.log`. Re-run with `--workers 1` if you need to
   debug a specific subject's warnings.
-* **`aparc+aseg.mgz` shape mismatch** — logged per subject and the affected ROI's
-  voxel/mask features are skipped (recorded in `missing_values.csv` /
-  `segmentation_summary.csv`), rather than crashing the whole run.
+* **Volume shape mismatch** — if the intensity volume's grid differs from the
+  segmentation's, intensity features for the affected ROIs are skipped and recorded in
+  `missing_values.csv` as `vox_intensity` (geometry features are still written). If
+  `aparc+aseg.mgz` has a different grid from `aseg.mgz`, its masks are exported but flagged
+  `DIM_MISMATCH` in `segmentation_summary.csv`. A corrupt or unreadable `.mgz` only affects
+  the ROIs that depend on it. Nothing crashes the whole run.
+* **`Status` column in `segmentation_summary.csv`** — `OK`, `EMPTY` (label not present in the
+  volume), `DIM_MISMATCH`, or `ERROR: <reason>`.
 
 ## 11. Results Dashboard
 
-`dashboard/index.html` is a single-file, static web dashboard for browsing the pipeline's
-outputs. Open it directly in a browser (double-click it, or `open dashboard/index.html`) —
+`index.html` (repository root) is a single-file, static web dashboard for browsing the pipeline's
+outputs. Open it directly in a browser (double-click it, or `open index.html`) —
 no server, no build step, no install needed.
 
 Load `master_features_wide.csv`, `missing_values.csv`, and `qc_report.txt` through the file
@@ -188,9 +217,12 @@ subjects-per-group chart, a region+feature comparison chart across groups (e.g. 
 hippocampus volume per diagnostic group), a searchable missing-values table, the raw QC
 report text, and a per-subject table for whichever region you select.
 
-To publish it as a public webpage via GitHub Pages: push this repo to GitHub, then in the
-repo's Settings → Pages, set the source to the `main` branch and `/dashboard` folder (or
-`/ (root)` and rename `dashboard/index.html` to `index.html` at the repo root).
+It needs an internet connection the first time it loads, because it pulls PapaParse and
+Chart.js from a CDN; your data still never leaves the browser.
+
+To publish it as a public webpage via GitHub Pages: in the repo's Settings → Pages, set the
+source to the `main` branch and `/ (root)` folder. Because the page only ever reads files the
+visitor picks from their own computer, publishing it exposes no data.
 
 ## 12. Reproducibility Notes
 
@@ -203,3 +235,17 @@ repo's Settings → Pages, set the source to the `main` branch and `/dashboard` 
 * Exported masks preserve the source volume's affine, voxel spacing, orientation, and
   dimensions exactly (copied from `mri/aseg.mgz` / `mri/aparc+aseg.mgz`'s header),
   so radiomics features computed later line up voxel-for-voxel with the original MRI.
+
+## 13. Tests
+
+```bash
+pip install -r requirements-dev.txt
+python3 -m pytest tests -q
+```
+
+The suite builds small synthetic FreeSurfer subjects on the fly (both `# ColHeaders` and
+legacy `# TableCol` stats files, `.mgz` volumes with anisotropic voxels and a non-trivial
+affine) and checks, among other things, that the stats-table and voxel-level feature families
+agree, that exported masks keep the source geometry, that missing ROIs/files/volumes are
+reported with a reason instead of crashing, and that `--workers 1` and `--workers 2` write
+byte-identical CSVs. No real patient data is needed or included.

@@ -198,6 +198,14 @@ let missingData = null;
 let groupChart = null;
 let regionChart = null;
 
+function esc(v) {
+  return String(v === null || v === undefined ? "" : v)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+const METADATA_COLUMNS = ["Age", "Sex", "MMSE", "Diagnosis", "Scanner", "AcquisitionDate"];
+
 function setStatus(id, text, cls) {
   const el = document.getElementById(id);
   el.textContent = text;
@@ -211,7 +219,8 @@ document.getElementById("fileQC").addEventListener("change", e => handleQC(e.tar
 function handleWide(file) {
   if (!file) return;
   Papa.parse(file, {
-    header: true, dynamicTyping: true, skipEmptyLines: true,
+    header: true, skipEmptyLines: true,
+    dynamicTyping: field => field !== "SubjectID" && field !== "Group",
     complete: results => {
       wideData = results.data;
       setStatus("statusWide", `Loaded ${wideData.length} subjects.`, "ok");
@@ -230,6 +239,7 @@ function handleMissing(file) {
       missingData = results.data;
       setStatus("statusMissing", `Loaded ${missingData.length} rows.`, "ok");
       renderMissingTable();
+      if (wideData) renderSummaryCards();
     },
     error: err => setStatus("statusMissing", "Failed to parse: " + err, "bad"),
   });
@@ -276,7 +286,7 @@ function renderSummaryCards() {
     { label: "Groups", value: Object.keys(groups).length, cls: "" },
     { label: "Fully complete subjects", value: complete, cls: "ok" },
     { label: "Subjects with any missing value", value: partial, cls: partial > 0 ? "warn" : "ok" },
-    { label: "Feature columns", value: Object.keys(wideData[0]).length - 2, cls: "" },
+    { label: "Feature columns", value: Object.keys(wideData[0]).filter(c => c !== "SubjectID" && c !== "Group" && !METADATA_COLUMNS.includes(c)).length, cls: "" },
   ];
 
   const container = document.getElementById("summaryCards");
@@ -317,10 +327,18 @@ function populateRegionControls() {
     opt.value = r; opt.textContent = r;
     regionSelect.appendChild(opt);
   });
-  regionSelect.addEventListener("change", () => { populateFeatureControls(); renderRegionChart(); renderSubjectTable(); });
   populateFeatureControls();
-  document.getElementById("featureSelect").addEventListener("change", () => { renderRegionChart(); renderSubjectTable(); });
 }
+
+document.getElementById("regionSelect").addEventListener("change", () => {
+  if (!wideData) return;
+  populateFeatureControls(); renderRegionChart(); renderSubjectTable();
+});
+document.getElementById("featureSelect").addEventListener("change", () => {
+  if (!wideData) return;
+  renderRegionChart(); renderSubjectTable();
+});
+document.getElementById("missingFilter").addEventListener("input", () => renderMissingTable());
 
 function populateFeatureControls() {
   const region = document.getElementById("regionSelect").value;
@@ -379,12 +397,12 @@ function renderSubjectTable() {
   const table = document.getElementById("subjectTable");
   const thead = table.querySelector("thead");
   const tbody = table.querySelector("tbody");
-  thead.innerHTML = "<tr><th>SubjectID</th><th>Group</th>" + cols.map(c => `<th>${c}</th>`).join("") + "</tr>";
+  thead.innerHTML = "<tr><th>SubjectID</th><th>Group</th>" + cols.map(c => `<th>${esc(c)}</th>`).join("") + "</tr>";
   tbody.innerHTML = "";
   wideData.forEach(row => {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${row.SubjectID}</td><td>${row.Group}</td>` +
-      cols.map(c => `<td>${fmt(row[region + "_" + c])}</td>`).join("");
+    tr.innerHTML = `<td>${esc(row.SubjectID)}</td><td>${esc(row.Group)}</td>` +
+      cols.map(c => `<td>${esc(fmt(row[region + "_" + c]))}</td>`).join("");
     tbody.appendChild(tr);
   });
 }
@@ -399,22 +417,22 @@ function renderMissingTable() {
   if (!missingData) return;
   const filterInput = document.getElementById("missingFilter");
   const countEl = document.getElementById("missingCount");
+  const MAX_ROWS = 500;
 
-  function draw() {
+  {
     const q = filterInput.value.trim().toLowerCase();
     const rows = missingData.filter(r =>
       !q || [r.SubjectID, r.Group, r.ROI, r.Feature, r.Reason].some(v => (v || "").toLowerCase().includes(q))
     );
-    countEl.textContent = `${rows.length} / ${missingData.length} rows shown`;
+    countEl.textContent = `${rows.length} / ${missingData.length} rows match` +
+      (rows.length > MAX_ROWS ? ` (showing first ${MAX_ROWS}; refine the filter to see others)` : "");
     const tbody = document.querySelector("#missingTable tbody");
-    tbody.innerHTML = rows.slice(0, 500).map(r => {
+    tbody.innerHTML = rows.slice(0, MAX_ROWS).map(r => {
       const badgeClass = (r.Feature === "ALL" || r.Feature === "vox_ALL") ? r.Feature : "other";
-      return `<tr><td>${r.SubjectID}</td><td>${r.Group}</td><td>${r.ROI}</td>` +
-        `<td><span class="badge ${badgeClass}">${r.Feature}</span></td><td>${r.Reason}</td></tr>`;
+      return `<tr><td>${esc(r.SubjectID)}</td><td>${esc(r.Group)}</td><td>${esc(r.ROI)}</td>` +
+        `<td><span class="badge ${badgeClass}">${esc(r.Feature)}</span></td><td>${esc(r.Reason)}</td></tr>`;
     }).join("");
   }
-  filterInput.addEventListener("input", draw);
-  draw();
 }
 </script>
 </body>

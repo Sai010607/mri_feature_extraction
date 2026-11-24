@@ -1,0 +1,4 @@
+pandas>=1.5
+numpy>=1.21
+nibabel>=4.0
+tqdm>=4.60
